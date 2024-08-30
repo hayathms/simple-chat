@@ -20,7 +20,6 @@ async fn handle_incoming_messages(mut stream: TcpStream) {
                 break;
             }
             Ok(n) => {
-                println!("Received message ---.");
                 if let Ok(msg) = String::from_utf8(buffer[..n].to_vec()) {
                     println!("\n[Chat] {}", msg);
                     print!("> ");

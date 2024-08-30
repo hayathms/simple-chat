@@ -43,11 +43,16 @@ async fn handle_client(stream: Arc<Mutex<TcpStream>>, addr: std::net::SocketAddr
                 match message {
                     ClientMessage::Connect { username } => {
                         let mut user_clients = user_clients.lock().await;
+                        if user_clients.contains_key(&username) {
+                            let msg = "Username already exists".to_string();
+                            stream.write_all(msg.as_bytes()).await.unwrap();
+                            stream.flush().await.unwrap();
+                            panic!("Username already exists");
+                        }
                         user_clients.insert(username.clone(), stream.clone());
                         println!("{} has connected", username);
                     }
                     ClientMessage::SendMessage { username, message } => {
-                        // iterate over user_clients and send the message to all users
                         let user_clients = user_clients.lock().await;
                         for (user, mut stream) in user_clients.iter() {
                             let msg = format!("{}: {}", username, message);
@@ -56,7 +61,6 @@ async fn handle_client(stream: Arc<Mutex<TcpStream>>, addr: std::net::SocketAddr
                         }
                     }
                     ClientMessage::Leave { username } => {
-                        // remove the user from the user_clients
                         let mut user_clients = user_clients.lock().await;
                         user_clients.remove(&username);
                         println!("{} has left", username);
