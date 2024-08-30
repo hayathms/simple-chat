@@ -55,9 +55,12 @@ async fn handle_client(stream: Arc<Mutex<TcpStream>>, addr: std::net::SocketAddr
                     ClientMessage::SendMessage { username, message } => {
                         let user_clients = user_clients.lock().await;
                         for (user, mut stream) in user_clients.iter() {
-                            let msg = format!("{}: {}", username, message);
-                            stream.write_all(msg.as_bytes()).await.unwrap();
-                            stream.flush().await.unwrap();
+                            // skip if user is the sender
+                            if user != &username {
+                                let msg = format!("{}: {}", username, message);
+                                stream.write_all(msg.as_bytes()).await.unwrap();
+                                stream.flush().await.unwrap();
+                            }
                         }
                     }
                     ClientMessage::Leave { username } => {
