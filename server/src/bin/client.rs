@@ -12,7 +12,7 @@ enum ClientMessage {
 }
 
 async fn handle_incoming_messages(mut stream: TcpStream) {
-    let mut buffer = vec![0u8; 1024];
+    let mut buffer = vec![0u8; 10024];
     loop {
         match stream.read(&mut buffer).await {
             Ok(0) => {
@@ -20,6 +20,7 @@ async fn handle_incoming_messages(mut stream: TcpStream) {
                 break;
             }
             Ok(n) => {
+                println!("Received message ---.");
                 if let Ok(msg) = String::from_utf8(buffer[..n].to_vec()) {
                     println!("\n[Chat] {}", msg);
                     print!("> ");
@@ -44,8 +45,6 @@ async fn handle_user_input(mut stream: TcpStream, username: &str) {
         stdin.read_line(&mut buffer).await.unwrap();
         let trimmed = buffer.trim();
 
-        println!("Entered Message but not sent");
-
         if trimmed == "leave" {
             let leave_message = ClientMessage::Leave { username: username.into() };
             let leave_data = serde_json::to_vec(&leave_message).unwrap();
@@ -56,10 +55,10 @@ async fn handle_user_input(mut stream: TcpStream, username: &str) {
                 username: username.into(),
                 message: trimmed.to_string(),
             };
-            println!("Sending message --- ");
             let send_data = serde_json::to_vec(&send_message).unwrap();
             {
                 stream.write_all(&send_data).await.unwrap();
+                stream.write(b"\n").await.unwrap();
                 stream.flush().await.unwrap();
             }
         }
@@ -80,10 +79,7 @@ async fn main() -> std::io::Result<()> {
     stream.write_all(&connect_data).await.unwrap();
     stream.flush().await.unwrap();
 
-    // let stream_for_incoming = stream_clone.clone();
-    // let username_for_input = username.clone();
-
-    // task::spawn(handle_incoming_messages(stream.clone()));
+    task::spawn(handle_incoming_messages(stream.clone()));
     handle_user_input(stream.clone(), &username).await;
 
     Ok(())

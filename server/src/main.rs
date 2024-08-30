@@ -1,31 +1,12 @@
-use async_std::io::Result;
-use async_std::net::{TcpStream, TcpListener};
-use async_std::stream::StreamExt;
-use async_std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use async_std::io::prelude::*;
+use async_std::net::{TcpListener, TcpStream};
+use async_std::sync::Mutex;
+use async_std::task;
 use serde::{Deserialize, Serialize};
-use async_std::io::ReadExt;
-use async_std::io::WriteExt;
-
-
-type UserStreamExt = Arc<Mutex<HashMap<String, TcpStream>>>;
-
-
-#[async_std::main]
-async fn main() -> Result<()>  {
-
-    let user_clients: UserStreamExt = Arc::new(Mutex::new(HashMap::new()));
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    println!(" ------- main --- 1-----");
-    let mut incoming = listener.incoming();
-    while let Some(stream) = incoming.next().await {
-        println!(" ------- main --- 2-----");
-        let stream = stream?;
-        handle_incoming_messages(stream, user_clients.clone()).await;
-        println!(" ------- main --- 3-----");
-    }
-    Ok(())
-}
+use serde_json;
+use async_std::sync::Arc;
+use async_std::io::Result;
+use std::collections::HashMap;
 
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -35,68 +16,75 @@ enum ClientMessage {
     Leave { username: String },
 }
 
+type UserStreamExt = Arc<Mutex<HashMap<String, TcpStream>>>;
 
-async fn handle_incoming_messages(mut stream: TcpStream, user_clients: UserStreamExt) {
-    println!(" ------- him --- 1-----");
-    let mut buffer = vec![0u8; 100024];
+async fn handle_client(stream: Arc<Mutex<TcpStream>>, addr: std::net::SocketAddr, user_clients: UserStreamExt) {
+    let mut buffer = vec![0u8; 1024];
+    loop {
+        let mut stream = stream.lock().await; // Lock the async mutex to get mutable access to the stream
 
-     match stream.read_to_end(&mut buffer).await {
-        Ok(_) => {
-            println!(" ------- him --- 2-----");
-            if let Ok(message) = serde_json::from_slice::<ClientMessage>(&buffer) {
-                println!(" ------- him --- 3-----");
-                println!("{:?}", message);
+        println!("Waiting for data from {}", addr);
+        let n = match stream.read(&mut buffer).await {
+            Ok(n) if n == 0 => {
+                println!("Connection closed by {}", addr);
+                return;
+            }
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("Failed to read from {}: {:?}", addr, e);
+                return;
+            }
+        };
+
+        let received_data = &buffer[..n];
+
+        match serde_json::from_slice::<ClientMessage>(received_data) {
+            Ok(message) => {
                 match message {
                     ClientMessage::Connect { username } => {
-                        println!(" ------- him --- 4-----");
                         let mut user_clients = user_clients.lock().await;
-                        // user_clients.insert(username.clone(), stream.clone());
+                        user_clients.insert(username.clone(), stream.clone());
+                        println!("{} has connected", username);
                     }
                     ClientMessage::SendMessage { username, message } => {
-                        println!(" ------- him --- 5-----");
-                        // let user_clients = user_clients.lock().await;
-                        // for (user_name, mut userstream) in user_clients.iter() {
-                        //     if user_name != &username {
-                        //         userstream.write_all(message.as_bytes()).await.expect("Stream is dead");
-                        //     }
-                        // }
+                        // iterate over user_clients and send the message to all users
+                        let user_clients = user_clients.lock().await;
+                        for (user, mut stream) in user_clients.iter() {
+                            let msg = format!("{}: {}", username, message);
+                            stream.write_all(msg.as_bytes()).await.unwrap();
+                            stream.flush().await.unwrap();
+                        }
                     }
                     ClientMessage::Leave { username } => {
-                        println!(" ------- him --- 6-----");
+                        // remove the user from the user_clients
                         let mut user_clients = user_clients.lock().await;
                         user_clients.remove(&username);
+                        println!("{} has left", username);
                     }
                 }
             }
-            println!(" ------- him --- 7-----");
+            Err(e) => {
+                eprintln!("Failed to deserialize message: {:?}", e);
+            }
         }
-        Err(_) => {
-            println!(" ------- him --- 8-----");
-        },
     }
-
-
-
-    // loop {
-    //     match stream.read(&mut buffer).await {
-    //         Ok(0) => {
-    //             println!("Connection closed by server.");
-    //             break;
-    //         }
-    //         Ok(n) => {
-    //             if let Ok(msg) = String::from_utf8(buffer[..n].to_vec()) {
-    //                 println!("\n[Chat] {}", msg);
-    //                 print!("> ");
-    //                 io::Write::flush(&mut io::stdout()).unwrap();
-    //             }
-    //         }
-    //         Err(err) => {
-    //             eprintln!("Error receiving message: {}", err);
-    //             break;
-    //         }
-    //     }
-    // }
 }
 
+async fn run_server(address: &str) -> std::io::Result<()> {
 
+    let user_clients: UserStreamExt = Arc::new(Mutex::new(HashMap::new()));
+    let listener = TcpListener::bind(address).await?;
+    println!("Server is running on {}", address);
 
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        println!("New connection from {}", addr);
+
+        let stream = Arc::new(Mutex::new(stream)); // Wrap the stream in Arc<async_std::sync::Mutex>
+        task::spawn(handle_client(Arc::clone(&stream), addr, user_clients.clone())); // Spawn the client handler
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    task::block_on(run_server("127.0.0.1:8080"))
+}
